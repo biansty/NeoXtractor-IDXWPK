@@ -26,7 +26,9 @@ class MeshParser1(BaseMeshParser):
         model['mesh_version'] = read_uint8(f)
 
         f.seek(12)
-        model['bone_count'] = read_uint8(f)
+        # Bone count is a little-endian uint16. Reading one byte truncates
+        # version 5 skeletons with more than 255 bones.
+        model['bone_count'] = read_uint16(f)
         f.seek(current_pos)  # Reset to position after magic number
 
         model['bone_exist'] = read_uint32(f)
@@ -39,17 +41,28 @@ class MeshParser1(BaseMeshParser):
                 f.read(2)
                 f.read(count * 4)
             bone_count = read_uint16(f)
+            model['bone_count'] = bone_count
             for _ in range(bone_count):
                 parent_node = read_uint16(f)
                 if parent_node == 65535:
                     parent_node = -1
                 parent_nodes.append(parent_node)
+            invalid_parents = [
+                (bone_index, parent_index)
+                for bone_index, parent_index in enumerate(parent_nodes)
+                if parent_index != -1 and not 0 <= parent_index < bone_count
+            ]
+            if invalid_parents:
+                raise ValueError(
+                    f"Invalid version {model['mesh_version']} bone hierarchy: "
+                    f"{invalid_parents[:8]}"
+                )
             model['bone_parent'] = parent_nodes
 
             bone_names = []
             for _ in range(bone_count):
                 bone_name = f.read(32)
-                bone_name = bone_name.decode().replace('\0', '').replace(' ', '_')
+                bone_name = bone_name.decode(errors='replace').replace('\0', '').replace(' ', '_')
                 bone_names.append(bone_name)
             model['bone_name'] = bone_names
 
@@ -112,12 +125,26 @@ class MeshParser1(BaseMeshParser):
             f.seek(vertex_count * 12, 1)
 
         model['face'] = []
-        # face index table
+        # NeoX mesh version 5 widened the index buffer to uint32. This is
+        # required for meshes such as 0x8b1b5e7 with 65,691 vertices, which
+        # cannot be addressed by a uint16 index. Older versions remain uint16.
+        index_reader = read_uint32 if model['mesh_version'] >= 5 else read_uint16
         for _ in range(face_count):
-            v1 = read_uint16(f)
-            v2 = read_uint16(f)
-            v3 = read_uint16(f)
+            v1 = index_reader(f)
+            v2 = index_reader(f)
+            v3 = index_reader(f)
             model['face'].append((v1, v2, v3))
+
+        invalid_faces = [
+            (face_index, face)
+            for face_index, face in enumerate(model['face'])
+            if any(vertex_index >= vertex_count for vertex_index in face)
+        ]
+        if invalid_faces:
+            raise ValueError(
+                f"Invalid version {model['mesh_version']} face indices for "
+                f"{vertex_count} vertices: {invalid_faces[:8]}"
+            )
 
         model['uv'] = []
         # vertex uv
