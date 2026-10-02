@@ -72,7 +72,7 @@ class ProcessedMeshData:
             bone_positions.append(pos)
 
             # Only create a line if the bone has a parent
-            if parent != -1:
+            if parent != -1 and 0 <= parent < len(raw_data.bone_matrix):
                 parent_matrix = raw_data.bone_matrix[parent]
                 parent_pos = np.asarray(parent_matrix.T)[:3, 3].copy()
                 parent_pos[0] = -parent_pos[0]
